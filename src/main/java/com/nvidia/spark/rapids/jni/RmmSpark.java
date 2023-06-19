@@ -392,6 +392,17 @@ public class RmmSpark {
     }
   }
 
+  public static boolean isFromThrowSplit() {
+    synchronized (Rmm.class) {
+      if (sra != null && sra.isOpen()) {
+        return sra.isFromThrowSplit();
+      } else {
+        // sra is not set so the value is true by default.
+        return true;
+      }
+    }
+  }
+
   /**
    * Get how long, in nanoseconds, that the task was blocked for
    * @param taskId the id of the task to get the metric for.

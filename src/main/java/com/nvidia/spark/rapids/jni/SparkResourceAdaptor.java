@@ -182,6 +182,10 @@ public class SparkResourceAdaptor
     return getAndResetBlockTimeInternal(getHandle(), taskId);
   }
 
+  public boolean isFromThrowSplit() {
+    return isFromThrowSplit(getHandle());
+  }
+
   public long getAndResetComputeTimeLostToRetry(long taskId) {
     return getAndResetComputeTimeLostToRetry(getHandle(), taskId);
   }
@@ -207,6 +211,7 @@ public class SparkResourceAdaptor
   private static native int getStateOf(long handle, long threadId);
   private static native int getAndResetRetryThrowInternal(long handle, long taskId);
   private static native int getAndResetSplitRetryThrowInternal(long handle, long taskId);
+  private static native boolean isFromThrowSplit(long handle);
   private static native long getAndResetBlockTimeInternal(long handle, long taskId);
   private static native long getAndResetComputeTimeLostToRetry(long handle, long taskId);
   private static native void startRetryBlock(long handle, long threadId);

@@ -195,6 +195,9 @@ public:
   // Is this thread currently in a marked retry block. This is only used for metrics.
   bool is_in_retry = false;
 
+  // a flag of whether to throw a split_retry exception
+  bool can_throw_split_retry_exp = false;
+  bool is_from_throw_split = false;
 
   std::chrono::time_point<std::chrono::steady_clock> block_start;
 
@@ -527,6 +530,17 @@ public:
     return ret;
   }
 
+  bool is_from_throw_split() {
+    bool ret = true;
+    auto thread_id = static_cast<long>(pthread_self());
+    std::unique_lock<std::mutex> lock(state_mutex);
+    auto thread = threads.find(thread_id);
+    if (thread != threads.end()) {
+      ret = thread->second.is_from_throw_split;
+    }
+    return ret;
+  }
+
   /**
    * get the number of times a split and retry was thrown and reset the value to 0.
    */
@@ -636,6 +650,7 @@ public:
    * same code and block if needed until the task is ready to keep going.
    */
   void block_thread_until_ready() {
+    logger->info("->users call block_thread_until_ready.");
     auto thread_id = static_cast<long>(pthread_self());
     std::unique_lock<std::mutex> lock(state_mutex);
     block_thread_until_ready(thread_id, lock);
@@ -755,6 +770,7 @@ private:
    * Internal implementation that will block a thread until it is ready to continue.
    */
   void block_thread_until_ready(long thread_id, std::unique_lock<std::mutex> &lock) {
+    logger->info("->enter block_thread_until_ready.");
     bool done = false;
     bool first_time = true;
     // Because this is called from alloc as well as from the public facing block_thread_until_ready
@@ -812,8 +828,15 @@ private:
           case TASK_SPLIT_THROW:
             transition(thread->second, thread_state::TASK_RUNNING);
             thread->second.record_failed_retry_time();
-            throw_split_and_retry_oom("rollback, split input, and retry operation", thread->second,
-                                    lock);
+            thread->second.is_from_throw_split = true;
+            logger->info("->SPLIT_THROW => RUNNING, can throw? {}", thread->second.can_throw_split_retry_exp);
+            if (thread->second.can_throw_split_retry_exp) {
+              throw_split_n_retry_oom("rollback, split input, and retry operation", thread->second,
+                                      lock);
+            } else {
+              // Try spilling through to disk before throw the split_retry exception
+              done = true;
+            }
             break;
           case TASK_REMOVE_THROW:
           // fall through
@@ -930,6 +953,7 @@ private:
    *         cuDF for a spill operation.
    */
   bool pre_alloc(long thread_id) {
+    logger->info("->enter pre_alloc");
     std::unique_lock<std::mutex> lock(state_mutex);
 
     auto thread = threads.find(thread_id);
@@ -1002,6 +1026,7 @@ private:
    * we detected recursion while handling a prior allocation in this thread.
    */
   void post_alloc_success(long thread_id, bool likely_spill) {
+    logger->info("->enter post_alloc_success");
     std::unique_lock<std::mutex> lock(state_mutex);
     // pre allocate checks
     auto thread = threads.find(thread_id);
@@ -1143,6 +1168,7 @@ private:
    * check to see if one of them needs to become BUFN or do a split and rollback.
    */
   void check_and_update_for_bufn(const std::unique_lock<std::mutex> &lock) {
+    logger->info("->enter check_and_update_for_bufn");
     // We want to know if all active tasks have at least one thread that
     // is effectively blocked or not.  We could change the definitions here,
     // but for now this sounds like a good starting point.
@@ -1265,11 +1291,18 @@ private:
    * if the state says we should.
    */
   bool post_alloc_failed(long thread_id, bool is_oom, bool likely_spill) {
+    logger->info("enter post_alloc_failed");
     std::unique_lock<std::mutex> lock(state_mutex);
     auto thread = threads.find(thread_id);
     // only retry if this was due to an out of memory exception.
     bool ret = true;
     if (!likely_spill && thread != threads.end()) {
+      logger->info("->post_alloc_failed, from split_throw? {}", thread->second.is_from_throw_split);
+      if (thread->second.is_from_throw_split) {
+        thread->second.can_throw_split_retry_exp = true;
+      } else {
+        thread->second.can_throw_split_retry_exp = false;
+      }
       switch (thread->second.state) {
         case TASK_ALLOC_FREE: transition(thread->second, thread_state::TASK_RUNNING); break;
         case TASK_ALLOC:
@@ -1492,6 +1525,17 @@ JNIEXPORT void JNICALL Java_com_nvidia_spark_rapids_jni_SparkResourceAdaptor_thr
     mr->thread_done_with_shuffle(thread_id);
   }
   CATCH_STD(env, )
+}
+
+JNIEXPORT bool JNICALL Java_com_nvidia_spark_rapids_jni_SparkResourceAdaptor_isFromThrowSplit(
+    JNIEnv *env, jclass, jlong ptr) {
+  JNI_NULL_CHECK(env, ptr, "resource_adaptor is null", true);
+  try {
+    cudf::jni::auto_set_device(env);
+    auto mr = reinterpret_cast<spark_resource_adaptor *>(ptr);
+    return mr->is_from_throw_split();
+  }
+  CATCH_STD(env, true)
 }
 
 JNIEXPORT void JNICALL Java_com_nvidia_spark_rapids_jni_SparkResourceAdaptor_forceRetryOOM(
