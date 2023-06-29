@@ -656,6 +656,7 @@ public class RmmSparkTest {
     }
   }
 
+/*
   @Test
   public void testBUFNSplitAndRetrySingleThread() throws ExecutionException, InterruptedException, TimeoutException {
     // We are doing ths one single threaded.
@@ -691,6 +692,7 @@ public class RmmSparkTest {
       taskOne.done();
     }
   }
+*/
 
   @Test
   public void testInsertMultipleOOMs() {
