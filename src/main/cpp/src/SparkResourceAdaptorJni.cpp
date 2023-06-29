@@ -831,7 +831,7 @@ private:
             thread->second.is_from_throw_split = true;
             logger->info("->SPLIT_THROW => RUNNING, can throw? {}", thread->second.can_throw_split_retry_exp);
             if (thread->second.can_throw_split_retry_exp) {
-              throw_split_n_retry_oom("rollback, split input, and retry operation", thread->second,
+              throw_split_and_retry_oom("rollback, split input, and retry operation", thread->second,
                                       lock);
             } else {
               // Try spilling through to disk before throw the split_retry exception
