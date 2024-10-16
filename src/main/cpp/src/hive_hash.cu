@@ -224,15 +224,29 @@ class hive_device_row_hasher {
      * @param col The column device view to be processed.
      */
     struct StackElement {
-      cudf::column_device_view col;  // current column
-      int child_idx;                 // index of the child column to process next, initialized as 0
-      hive_hash_value_t cur_hash;    // current hash value of the column
-
       __device__ StackElement() = delete;
       __device__ StackElement(cudf::column_device_view col)
-        : col(col), child_idx(0), cur_hash(HIVE_INIT_HASH)
+        : column(col), child_idx(0), cur_hash(HIVE_INIT_HASH)
       {
       }
+
+      __device__ void update_cur_hash(hive_hash_value_t child_hash)
+      {
+        this->cur_hash = this->cur_hash * HIVE_HASH_FACTOR + child_hash;
+      }
+
+      __device__ hive_hash_value_t get_hash() { return this->cur_hash; }
+
+      __device__ int child_idx_inc_one() { return this->child_idx++; }
+
+      __device__ int cur_child_idx() { return this->child_idx; }
+
+      __device__ cudf::column_device_view col() { return this->column; }
+
+     private:
+      cudf::column_device_view column;  // current column
+      hive_hash_value_t cur_hash;       // current hash value of the column
+      int child_idx;  // index of the child column to process next, initialized as 0
     };
 
     typedef StackElement* StackElementPtr;
@@ -368,62 +382,49 @@ class hive_device_row_hasher {
                                             cudf::size_type row_index) const noexcept
     {
       cudf::column_device_view curr_col = col.slice(row_index, 1);
-      // column_device_view default constructor is deleted, can not allocate StackElement array
-      // directly use byte array to wrapper StackElement list
-      constexpr int len_of_maxlen_stack_element = MAX_NESTED_DEPTH * sizeof(StackElement);
-      uint8_t stack_wrapper[len_of_maxlen_stack_element];
-      StackElementPtr stack = reinterpret_cast<StackElementPtr>(stack_wrapper);
-      int stack_size        = 0;
+      // StackElement default constructor is deleted, can not allocate StackElement array
+      // directly use byte array to wrapper StackElement list.
+      uint8_t stack_wrapper[MAX_NESTED_DEPTH * sizeof(StackElement)];
+      StackElementPtr col_stack = reinterpret_cast<StackElementPtr>(stack_wrapper);
+      int stack_pos             = 0;
+      col_stack[stack_pos]      = StackElement(curr_col);
 
-      stack[stack_size++] = StackElement(curr_col);
-
-      while (stack_size > 0) {
-        StackElementPtr element = &stack[stack_size - 1];
-        curr_col                = element->col;
+      while (stack_pos >= 0) {
+        StackElementPtr element = &col_stack[stack_pos];
+        curr_col                = element->col();
         // Do not pop it until it is processed. The definition of `processed` is:
         // - For nested types, it is when the children are processed (i.e., cur.child_idx ==
         // cur.num_child()).
         // - For primitive types, it is when the hash value is computed.
         if (curr_col.type().id() == cudf::type_id::STRUCT) {
           // All child columns processed, pop the element and update `cur_hash` of its parent column
-          if (element->child_idx == curr_col.num_child_columns()) {
-            stack_size--;
-            if (stack_size > 0) {
-              stack[stack_size - 1].cur_hash =
-                stack[stack_size - 1].cur_hash * HIVE_HASH_FACTOR + element->cur_hash;
+          if (element->cur_child_idx() == curr_col.num_child_columns()) {
+            if (--stack_pos >= 0) {  // now stack_pos points to the parent already.
+              col_stack[stack_pos].update_cur_hash(element->get_hash());
             }
           } else {
             // Push the next child column into the stack
-            stack[stack_size++] =
+            col_stack[++stack_pos] =
               StackElement(cudf::detail::structs_column_device_view(curr_col).get_sliced_child(
-                element->child_idx));
-            element->child_idx++;
+                element->child_idx_inc_one()));
           }
         } else if (curr_col.type().id() == cudf::type_id::LIST) {
           // lists_column_device_view has a different interface from structs_column_device_view
           curr_col = cudf::detail::lists_column_device_view(curr_col).get_sliced_child();
-          if (element->child_idx == curr_col.size()) {
-            stack_size--;
-            if (stack_size > 0) {
-              stack[stack_size - 1].cur_hash =
-                stack[stack_size - 1].cur_hash * HIVE_HASH_FACTOR + element->cur_hash;
-            }
+          if (element->cur_child_idx() == curr_col.size()) {
+            if (--stack_pos >= 0) { col_stack[stack_pos].update_cur_hash(element->get_hash()); }
           } else {
-            stack[stack_size++] = StackElement(curr_col.slice(element->child_idx, 1));
-            element->child_idx++;
+            col_stack[++stack_pos] = StackElement(curr_col.slice(element->child_idx_inc_one(), 1));
           }
         } else {
           // There is only one element in the column for primitive types
-          element->cur_hash =
-            cudf::type_dispatcher(curr_col.type(), this->hash_functor, curr_col, 0);
-          stack_size--;
-          if (stack_size > 0) {
-            stack[stack_size - 1].cur_hash =
-              stack[stack_size - 1].cur_hash * HIVE_HASH_FACTOR + element->cur_hash;
-          }
+          auto hash_ret = cudf::type_dispatcher<cudf::experimental::dispatch_void_if_nested>(
+            curr_col.type(), this->hash_functor, curr_col, 0);
+          element->update_cur_hash(hash_ret);
+          if (--stack_pos >= 0) { col_stack[stack_pos].update_cur_hash(element->get_hash()); }
         }
       }
-      return stack[0].cur_hash;
+      return col_stack[0].get_hash();
     }
 
    private:
