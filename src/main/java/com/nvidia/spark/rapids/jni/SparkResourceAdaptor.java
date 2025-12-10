@@ -281,6 +281,10 @@ public class SparkResourceAdaptor
     return getMaxGpuTaskMemory(getHandle(), taskId);
   }
 
+  public long getActiveGpuTaskMemory(long taskId) {
+    return getActiveGpuTaskMemory(getHandle(), taskId);
+  }
+
   public long getTotalBlockedOrLostTime(long taskId) {
     return getTotalBlockedOrLostTime(getHandle(), taskId);
   }
@@ -390,6 +394,7 @@ public class SparkResourceAdaptor
   private static native long getAndResetComputeTimeLostToRetry(long handle, long taskId);
   private static native long getAndResetGpuMaxMemoryAllocated(long handle, long taskId);
   private static native long getMaxGpuTaskMemory(long handle, long taskId);
+  private static native long getActiveGpuTaskMemory(long handle, long taskId);
   private static native long getTotalBlockedOrLostTime(long handle, long taskId);
   private static native void startRetryBlock(long handle, long threadId);
   private static native void endRetryBlock(long handle, long threadId);

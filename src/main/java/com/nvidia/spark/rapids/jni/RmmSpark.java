@@ -25,15 +25,15 @@ import ai.rapids.cudf.RmmTrackingResourceAdaptor;
 
 /**
  * Initialize RMM in ways that are specific to Spark.
- * 
+ *
  * Because of the close ties of this class with Rmm.class, we are going to use
  * locks provided by Rmm class here, instead of our own locking.
- * 
+ *
  * Rmm.writeLock:
- * - Only used when setting or clearing the event handler. 
+ * - Only used when setting or clearing the event handler.
  * - This makes sure we have Rmm.class exclusively, and also protected `sra`
  *   in this class.
- * 
+ *
  * Rmm.readLock:
  * - Used for all other apis.
  */
@@ -609,10 +609,10 @@ public class RmmSpark {
 
   /**
    * Function used to remove task metrics.
-   * 
+   *
    * Use this after a task is complete, and metrics have been reported to
    * clean up any metric related state
-   * 
+   *
    * @param taskId the id of the task to remove metrics for.
    */
   public static void removeTaskMetrics(long taskId) {
@@ -740,6 +740,20 @@ public class RmmSpark {
     try {
       if (sra != null && sra.isOpen()) {
         return sra.getMaxGpuTaskMemory(taskId);
+      } else {
+        // sra is not set so the value is by definition 0
+        return 0;
+      }
+    } finally {
+      Rmm.readLock.unlock();
+    }
+  }
+
+  public static long getActiveGpuTaskMemory(long taskId) {
+    Rmm.readLock.lock();
+    try {
+      if (sra != null && sra.isOpen()) {
+        return sra.getActiveGpuTaskMemory(taskId);
       } else {
         // sra is not set so the value is by definition 0
         return 0;

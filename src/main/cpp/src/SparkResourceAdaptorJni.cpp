@@ -1092,6 +1092,11 @@ class spark_resource_adaptor final : public rmm::mr::device_memory_resource {
     return get_metric(task_id, &task_metrics::gpu_memory_max_footprint);
   }
 
+  long get_active_gpu_task_memory(long const task_id)
+  {
+    return get_metric(task_id, &task_metrics::gpu_memory_active_footprint);
+  }
+
   long get_total_blocked_or_lost(long const task_id)
   {
     // This is a little more complex than a regular get_metric, because we want
@@ -2492,6 +2497,21 @@ JNIEXPORT jlong JNICALL Java_com_nvidia_spark_rapids_jni_SparkResourceAdaptor_ge
   {
     auto mr = reinterpret_cast<spark_resource_adaptor*>(ptr);
     return mr->get_max_gpu_task_memory(task_id);
+  }
+  JNI_CATCH(env, 0);
+}
+
+JNIEXPORT jlong JNICALL
+Java_com_nvidia_spark_rapids_jni_SparkResourceAdaptor_getActiveGpuTaskMemory(JNIEnv* env,
+                                                                             jclass,
+                                                                             jlong ptr,
+                                                                             jlong task_id)
+{
+  JNI_NULL_CHECK(env, ptr, "resource_adaptor is null", 0);
+  JNI_TRY
+  {
+    auto mr = reinterpret_cast<spark_resource_adaptor*>(ptr);
+    return mr->get_active_gpu_task_memory(task_id);
   }
   JNI_CATCH(env, 0);
 }
